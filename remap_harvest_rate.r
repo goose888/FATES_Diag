@@ -39,14 +39,17 @@
 #	this should be changed in e3sm phase 3 restructuring
 # also: the diagnostic time series data have not been shifted and so are plotted accordingly
 
+# note:
+# This script maybe highly inefficient with high-res input data.
+# I only tested the inputs with a global 4x5 degree resolution
+
 library(raster)
 library(rasterVis)
 library(RColorBrewer)
+library(terra)
 library(ncdf4)
 library(parallel)
 library(plyr)
-
-##### the single cell function for parallelizing must be defined first !!!!!!!
 
 ################# calculate max mode function
 calculate_mode <- function(x) {
@@ -85,9 +88,9 @@ remap_harv_rate <- function(nlon_out, nlat_out, nyr, forest_c, harv_c, harv_ts)	
   # nlon_out - length of longitude
   # nlat_out - length of latitude
   # nyr - length of year
-  # forest_c - Forest C density
-  # harv_c - accumulated harvested C density
-  # harv_ts - Time series of wood harvest rate
+  # forest_c - Forest C density (kgC m-2 grid area)
+  # harv_c - accumulated harvested C density (kgC m-2 grid area)
+  # harv_ts - Time series of wood harvest rate (kgC per grid)
 
   surplus_map = forest_c - harv_c
   surplus_map[which(surplus_map <= 0)] <- NA
@@ -131,8 +134,7 @@ remap_harv_rate <- function(nlon_out, nlat_out, nyr, forest_c, harv_c, harv_ts)	
               redis_factor[ln+n,lt+t] = - redis_factor[ln,lt] * 
                 surplus_map[ln+n,lt+t] / hotspot_for_c
               # Update surplus map
-              surplus_map[ln+n,lt+t] = forest_c[ln+n,lt+t] -
-                harv_c[ln+n,lt+t] + redis_factor[ln+n,lt+t] * harv_c[ln,lt]
+              surplus_map[ln+n,lt+t] = surplus_map[ln+n,lt+t] - redis_factor[ln+n,lt+t] * harv_c[ln,lt]
             }
           }
         }
@@ -147,6 +149,167 @@ remap_harv_rate <- function(nlon_out, nlat_out, nyr, forest_c, harv_c, harv_ts)	
   } # End of cell loop
 
   return(harv_ts)
+  
+} # end of harvest rate remap function
+
+################# remap the harvest rate for a specific year
+# A duplication of "remap_harv_rate" for secondary forest.
+# There are two major difference in this function
+# 1) The calculated revision factors will only be applied to the harvest rate in current year
+# 2) After the revision of harvest rate, forest density will be updated to exclude
+# the harvested amount in all the following years after the current year
+remap_harv_rate_per_yr <- function(nlon_out, nlat_out, nyear_out, cyr, forest_c, harv_c, area_grid, out_list)	{
+  # Arguments:
+  # nlon_out - length of longitude
+  # nlat_out - length of latitude
+  # cyr - current year
+  # forest_c - forest C density of current year
+  # harv_c - harvested C density of current year
+  # area_grid - grid area
+  # Return:
+  # out_list - a list contains two outputs:
+  # 1) harv_ts - wood harvest rate of the current year
+  # 2) new_forest_c - forest C density time series after subtracting the 
+  # revised harvested C 
+  # 
+  
+  # Initialization
+  small_tol = 0.0
+  surplus_map = forest_c - harv_c
+  surplus_map[which(surplus_map <= 0)] <- NA
+  harv_debt = forest_c - harv_c
+  harv_debt[which(harv_debt >= 0)] <- NA
+  harv_ts <- out_list[[1]]
+  
+  # Longitude and latitude loop
+  for (ln in 1:nlon_out){
+    for (lt in 1:nlat_out){
+      # If current grid has harvest debt
+      cur_harv_debt = harv_debt[ln,lt] 
+      if(!is.na(cur_harv_debt) && cur_harv_debt < 0.0){
+        # Reset output
+        redis_factor = array(0, dim = c(nlon_out,nlat_out))
+        # Set search radius
+        i = 0
+        while (cur_harv_debt < 0.0) {
+          hotspot_for_c = 0.0
+          i = i + 1
+          # if(i>=10){
+          #     cat("Warning! search radius is too large.", ln, lt,"\n")
+          #     cat("Forest_C", forest_c[ln,lt], "\n")
+          #     cat("Harv_C", harv_c[ln,lt], "\n")
+          #     cat("Debug forest_C", forest_c[1,25], "\n")
+          # }
+          # Sum the available forest C within the range
+          for (t in -i:i) {
+            for (n in -i:i) {
+              n = adjust_bound(ln, n, nlon_out)
+              t = adjust_bound(lt, t, nlat_out)
+              # Exclude NA value
+              if(!is.na(surplus_map[ln+n,lt+t]) && surplus_map[ln+n,lt+t] > small_tol){
+                hotspot_for_c = hotspot_for_c + surplus_map[ln+n,lt+t]
+              }
+            }
+          }
+          # if(i>=10){
+          #   cat("Hotspot C", hotspot_for_c, "\n")
+          #   readline(prompt="Pause, press [enter] to continue")
+          # }
+          cur_harv_debt = harv_debt[ln,lt] + hotspot_for_c
+        } # End of search
+        if(hotspot_for_c <= 0.0){
+          cat("Zero available C occured. \n")
+          cat("The grid id, ", ln, lt, "\n")
+          cat("The radius is, ", i, "\n")
+          cat("The harv debt is, ", harv_debt[ln,lt], "\n")
+          readline(prompt="Pause, press [enter] to continue")
+        }        
+        # Calculate the adjustment factor of harvest rate to redistribute 
+        # harvest debt over the region based on the proportion of
+        # surplus forest C
+        redis_factor[ln,lt] = harv_debt[ln,lt] / harv_c[ln,lt]
+        harv_ts[ln,lt] = harv_ts[ln,lt] + (redis_factor[ln,lt] * harv_c[ln,lt])*1e6*area_grid[ln,lt]
+        for (t in -i:i) {
+          for (n in -i:i) {
+            n = adjust_bound(ln, n, nlon_out)
+            t = adjust_bound(lt, t, nlat_out)
+            if(!is.na(surplus_map[ln+n,lt+t])){
+              redis_factor[ln+n,lt+t] = - redis_factor[ln,lt] * 
+                surplus_map[ln+n,lt+t] / hotspot_for_c
+              # Update surplus map
+              if((ln+n) == 2 && (lt+t) == 38){
+                cat("Year?", cyr, " \n")
+                cat("Forest C of the point.", forest_c[ln+n,lt+t], " \n")
+                cat("Point found before.", surplus_map[ln+n,lt+t], " \n")
+              }
+              surplus_map[ln+n,lt+t] = surplus_map[ln+n,lt+t] - redis_factor[ln+n,lt+t] * harv_c[ln,lt]
+              # Adjust the harvest rate of current year
+              harv_ts[ln+n,lt+t] = harv_ts[ln+n,lt+t] + (redis_factor[ln+n,lt+t] * harv_c[ln,lt])*1e6*area_grid[ln+n,lt+t]
+              
+              # if((ln+n) == 2 && (lt+t) == 38){
+              #   cat("Point found after.", surplus_map[ln+n,lt+t], " \n")
+              #   cat("Redis factor.", redis_factor[ln+n,lt+t] * harv_c[ln,lt], " \n")
+              #   cat("Source harv c.", harv_c[ln,lt], " \n")
+              #   cat("The grid id, ", ln+n, lt+t, "\n")
+              #   cat("The source grid id, ", ln, lt, "\n")
+              #   cat("The total available C for source is, ", hotspot_for_c, "\n")
+              #   readline(prompt="Pause, press [enter] to continue")
+              # }
+            }
+          }
+        }
+        # Update harvest debt map
+        harv_debt[ln,lt] = 0.0
+        # Adjust the harvest rate of current year
+        # harv_ts[,] = harv_ts[,] + harv_ts[ln,lt]*redis_factor[,]
+        out_list[[1]] <- harv_ts
+      } # End of harvest debt check
+    }
+  } # End of cell loop
+  
+  # Update harvest rate
+  out_list[[1]] <- harv_ts
+  # Adjust the Time Series of forest C
+  new_forest_c <- out_list[[2]]
+  for (i in cyr:nyear_out) {
+    new_forest_c[,,i] = new_forest_c[,,i] - harv_ts*1e-6 / area_grid
+  }
+  # if(any(new_forest_c < -1e-10, na.rm=TRUE)){
+  #   stop(paste("Error: Detected large negative forest biomass.", ))
+  # }
+  # Tiny negative forest C due to calculation error is possible, thus force 
+  # negative values to zero
+  # new_forest_c[new_forest_c<0] = 0.0
+  out_list[[2]] <- new_forest_c
+  
+  # tmp_test = harv_ts*1e-6 / area_grid
+  # cat("harv_ts?", tmp_test[2,38], "\n")
+  # cat("new_forest_c?", new_forest_c[2,38,1:10], "\n")
+  # readline(prompt="Press [enter] to continue")
+  
+  # Check if any NAN exists in harv_ts
+  # tmp_array = is.nan(harv_ts)
+  # if(length(harv_ts[tmp_array]) != 0){
+  #   readline(prompt="Press [enter] to continue")
+  #   cat("In which year we have NAN?", cyr, "\n")
+  #   cat("How many NANs do we have?", length(harv_ts[tmp_array]), "\n")
+  #   tmp_out = new_forest_c[,,cyr]
+  #   cat("New_forest_c:", forest_c[tmp_array], "\n")
+  # }
+  # Do a negative check on new_forest_c
+  for (ln in 1:nlon_out){
+    for (lt in 1:nlat_out){
+      if(!is.na(new_forest_c[ln,lt,cyr]) && new_forest_c[ln,lt,cyr] < -1e-10){
+        cat("In which year we have?", cyr, "\n")
+        cat("Location?", ln, lt, "\n")
+        cat("New_forest_c:", new_forest_c[ln,lt,cyr], "\n")
+        cat("Harv_c:", harv_c[ln,lt], "\n")
+        readline(prompt="Press [enter] to continue")
+      }
+    }
+  }
+  
+  return(out_list)
   
 } # end of harvest rate remap function
 
@@ -205,7 +368,11 @@ gcam_reg_file = "C:/Users/sshu3/anaconda_wkspace/FATES/AEZ_orig.grd"
 grid_file = "C:/Users/sshu3/anaconda_wkspace/FATES/griddata_4x5_060404.nc"
 land_file = "C:/Users/sshu3/anaconda_wkspace/FATES/landuse.timeseries_4x5_hist_simyr1850-2015_200311_biomass_harvest.nc"
 biom_den_file = "C:/Users/sshu3/anaconda_wkspace/FATES/fates.forest.vegc.avg_2000_2009.nc"
+secb_den_file = "C:/Users/sshu3/anaconda_wkspace/FATES/fates.sec.forest.vegc.ts_1850_2015.nc"
 out_land_file = "C:/Users/sshu3/anaconda_wkspace/Fates/landuse.timeseries_4x5_hist_harmonized_simyr1850-2015.biomass_harvest.nc"
+# Stage 1 --- Harmonize primary forest
+# Stage 2 --- Harmonize secondary forest
+stage = 2
 start_year_in = 1850
 diag_plots = FALSE
 num_cores = detectCores()
@@ -258,9 +425,14 @@ harv_rate_acc = array(dim=c(num_harvest, nlon_out, nlat_out))
 harv_rate_acc[,,]= 0
 harv_rate_den = array(dim=c(num_harvest, nlon_out, nlat_out))
 harv_rate_den[,,]= 0
+harv_rate_den_ts = array(dim=c(num_harvest, nlon_out, nlat_out, nyears_out))
+harv_rate_den_ts[,,,]= 0
 for (h in 1:num_harvest) {
   harv_rate_acc[h,,] = rowSums(harv_rate_in[h,,,], dims = 2)
-  harv_rate_den[h,,] = harv_rate_acc[h,,]*1e-6 / area_grid 
+  harv_rate_den[h,,] = harv_rate_acc[h,,]*1e-6 / area_grid
+  for (i in 1:nyears_out) {
+    harv_rate_den_ts[h,,,i] = harv_rate_in[h,,,i]*1e-6 / area_grid
+  }
 }
 
 # Read in GCAM agro-ecological zone (AEZ) file
@@ -279,16 +451,27 @@ PROJ4_STRING = "+proj=longlat +ellps=WGS84 +datum=WGS84 +no_defs"
 # gcam_out = array(dim=c(nlon_out, nlat_out))
 # gcam_out[,] = luh2elm_out[, "layer"]
 
-
-
 # 2. Read in biomass density from ELM-FATES
 bioid = nc_open(biom_den_file)
-forestc_den = ncvar_get(bioid, varid = "FATES_VEGC_FOREST", start=c(1,1), count=c(nlon_out,nlat_out))
+# Potential forest is calculated through FATES spinup under pre-industrial 
+# CO2 level
+forestc_pri_den = ncvar_get(bioid, varid = "FATES_VEGC_FOREST", start=c(1,1), count=c(nlon_out,nlat_out))
+nc_close(bioid)
+# Potential secondary forest is calculated through FATES via
+# assuming no secondary forest harvest but do apply primary forest harvest
+# and the historical CO2 timeseries
+bioid = nc_open(secb_den_file)
+forestc_sec_den = ncvar_get(bioid, varid = "FATES_SEC_VEGC_FOREST", start=c(1,1,1), count=c(nlon_out,nlat_out,nyears_out))
+# Young secondary forest biomass is all the available biomass 
+# with age less than 50 years
+# Mature secondary forest contains all the available biomass after 
+# subtracting young forest from total secondary forest
+# forestc_secy_den = ncvar_get(bioid, varid = "FATES_SECY_VEGC_FOREST", start=c(1,1), count=c(nlon_out,nlat_out))
 nc_close(bioid)
 
 # Quick diagnosis of the harvest rate diff
 if(diag_plots) {
-  diff_den = harv_rate_den[1,,] - forestc_den
+  diff_den = harv_rate_den[1,,] - forestc_pri_den
   pdf(file=paste0(outpath, "check_harvrate_luh2_minus_fatesvegc.pdf"), width=8.5, height=4)
   cols <- brewer.pal(3, "RdYlGn")
   pal <- colorRampPalette(cols)
@@ -297,7 +480,21 @@ if(diag_plots) {
 }
 
 # 3. Harmonize LUH2 harvest rate with FATES forest C distribution
-new_harv_ts = remap_harv_rate(nlon_out, nlat_out, nyears_out, forestc_den, harv_rate_den[1,,], harv_rate_in[1,,,])
+if(stage == 1) {
+  new_harv_ts = remap_harv_rate(nlon_out, nlat_out, nyears_out, forestc_pri_den, harv_rate_den[1,,], harv_rate_in[1,,,])
+} else if(stage == 2) {
+  new_harv_ts = array(dim=c(nlon_out, nlat_out, nyears_out))
+  new_harv_ts[,,]= 0
+  tmp_ls <- vector(mode='list',length=2)
+  for (i in 1:nyears_out){
+    tmp_ls[[1]] <- harv_rate_in[3,,,i]
+    tmp_ls[[2]] <- forestc_sec_den[,,]
+    tmp_ls = remap_harv_rate_per_yr(nlon_out, nlat_out, nyears_out, i, forestc_sec_den[,,i], harv_rate_den_ts[3,,,i], area_grid, tmp_ls)
+    # update forestc_sec_den
+    new_harv_ts[,,i] <- tmp_ls[[1]]
+    forestc_sec_den <- tmp_ls[[2]]
+  }
+}
 
 # 4. Validate the new harvest rate time series vs. old one.
 harvest_in_globe_series = array(dim=c(nyears_out))
@@ -306,186 +503,21 @@ harvest_out_globe_series = array(dim=c(nyears_out))
 harvest_out_globe_series[] = 0
 for (yind_out in 1:(nyears_out-1)) {
   # match the in year to the out year
-  harvest_in_globe_series[yind_out] = sum(harv_rate_in[1,,,yind_out], na.rm=TRUE) * k2P
+  harvest_in_globe_series[yind_out] = sum(harv_rate_in[3,,,yind_out], na.rm=TRUE) * k2P
   harvest_out_globe_series[yind_out] = sum(new_harv_ts[,,yind_out], na.rm=TRUE) * k2P
 }
 plot(years_out[1:(nyears_out-1)], harvest_in_globe_series[1:(nyears_out-1)], type = "l", lty = 1, main = "Annual total global biomass harvest",
      xlab = "Year", ylab = "Harvested carbon in kg C")
 lines(years_out[1:(nyears_out-1)], harvest_out_globe_series[1:(nyears_out-1)], lty=2, col = "red")
-legend("topleft", legend = c("LUH2 Primary Forest Harvest", "Harmonized Primary Forest Harvest"), lty=c(1,2), col = c("black", "red"), cex = 0.8)
+legend("topleft", legend = c("LUH2 Secondary Forest Harvest", "Harmonized Secondary Forest Harvest"), lty=c(1,2), col = c("black", "red"), cex = 0.8)
 
-# 5. Overwrite the wood harvest TS
-# Shijie: These code need to be revised later
-harv_rate_in[1,,,] = new_harv_ts[,,]
-for (h in 2:num_harvest) {
-  harv_rate_in[h,,,] = 0.0
-}
+# # 5. Overwrite the wood harvest TS
+# # Shijie: These code need to be revised later
+# harv_rate_in[1,,,] = new_harv_ts[,,]
+# for (h in 2:num_harvest) {
+#   harv_rate_in[h,,,] = 0.0
+# }
 
-# this overwrites an existing out_land_file
-file.copy(land_file, out_land_file, overwrite=TRUE)
-
-cat("Before writing new file\n")
-
-# rename original fraction data and add biomass harvest data with original names
-lsid = nc_open(out_land_file, write=TRUE)
-
-# get the dimension objects
-lon_dim = lsid$dim[['lsmlon']]
-lat_dim = lsid$dim[['lsmlat']]
-time_dim = lsid$dim[['time']]
-
-for (h in 1:num_harvest) {
-  # rename fraction data
-  lsid <- ncvar_rename(lsid, ls_harv_names[h], ls_harv_names_frac[h])
-  
-  # define and add new variables; missing value is 0
-  new_var <- ncvar_def(ls_harv_names[h], "kg C per year", list(lon_dim, lat_dim, time_dim), prec="double")
-  lsid <- ncvar_add(lsid, new_var)
-  
-  # add biomass harvest data
-  ncvar_put(lsid, varid = ls_harv_names[h], vals = harv_rate_in[h,,,], start = c(1,1,1), count = c(nlon_out, nlat_out, nyears_out))
-} # end for loop over h for updating output file	
-
-nc_close(lsid)
-
-cat("Finish remap_harvest_rate at", date(), "\n")
-
-
-# # projection info for all files, data, and rasters
-# PROJ4_STRING = "+proj=longlat +ellps=WGS84 +datum=WGS84 +no_defs"
-# 
-# # precision tolerance for error checking
-# tol = 1e-4
-# 
-# 
-# # check that griddata file and land use file have same lat-lon cell centers
-# if (nlon_out != nlon_grid | nlat_out != nlat_grid) {
-#   stop(paste("Error: grid file", grid_file, "lat", nlat_grid, " and lon", nlon_grid, "dims do not match land surface file",
-#              land_file, "lat", nlat_out, " and lon", nlon_out, "dims"))
-# } else {
-#   d = latixy_grid - latixy_out
-#   if (sum(d) != 0) {
-#     stop(paste("Error: grid latixy do not match land surface latixy"))
-#   }
-#   d = longxy_grid - longxy_out
-#   if (sum(d) != 0) {
-#     stop(paste("Error: grid longxy do not match land surface longxy"))
-#   }
-# } # end if-else check on grid specs
-# 
-# # open the luh2 file and get lat-lon bounds and number of years
-# # there is no year variable, the first time record depends on whether it is historical or future
-# # the data start in the upper left corner (-180,90 corner), with 0.25 degree resolution
-# luh2id = nc_open(luh2_file)
-# nlon_in = luh2id$dim$lon$len
-# nlat_in = luh2id$dim$lat$len
-# nyears_in = luh2id$dim$time$len
-# nbounds_in = luh2id$dim$bounds$len
-# lat_bounds_in = ncvar_get(luh2id, varid = "lat_bounds", start=c(1,1), count=c(nbounds_in, nlat_in))
-# lon_bounds_in = ncvar_get(luh2id, varid = "lon_bounds", start=c(1,1), count=c(nbounds_in, nlon_in))
-# 
-# # set up some arrays
-# harvest_in = array(dim=c(num_harvest, nlon_in, nlat_in))
-# harvest_in_globe = array(dim=c(num_harvest))
-# harvest_in_globe_series = array(dim=c(nyears_out))
-# harvest_in_globe_series[] = 0
-# harvest_out = array(dim=c(num_harvest, nlon_out, nlat_out, nyears_out))
-# harvest_out_globe = array(dim=c(num_harvest))
-# harvest_out_globe_series = array(dim=c(nyears_out))
-# harvest_out[,,,]= 0
-# harvest_out_globe_series[] = 0
-# 
-# # loop over years to read in and map the data
-# # collect the output data in an array for later transfer to file
-# for (yind_out in 1:(nyears_out-1)) {
-#   # match the in year to the out year
-#   year_out = years_out[yind_out]
-#   yind_in = year_out - start_year_in + 1
-#   
-#   # read this year's in data and convert to rasters and put into a stack
-#   # need to flip the lat so that the matrix origin is at the lower left corner
-#   harvest_in[,,] = 0
-#   harvest_in_globe[] = 0
-#   harvest_out_globe[] = 0
-#   harvest_in_rast_stack=stack()
-#   for (h in 1:num_harvest) {
-#     harvest_in[h,,] = ncvar_get(luh2id, varid=luh2_bioharv_names[h], start=c(1, 1, yind_in), count=c(nlon_in, nlat_in, 1))
-#     harvest_in_t = t(harvest_in[h,,])
-#     harvest_rast = raster(x=harvest_in_t, xmn=-180, ymn=-90, xmx=180, ymx=90, crs=PROJ4_STRING)
-#     harvest_in_rast_stack = addLayer(harvest_in_rast_stack , harvest_rast)
-#     # sum global harvest for comparison with out
-#     harvest_in_globe[h] = sum(harvest_in[h,,], na.rm=TRUE)
-#   } # end for loop over h for in data
-#   # set the raster layer names
-#   names(harvest_in_rast_stack) <- luh2_bioharv_names
-#   
-#   # process each out cell in parallel
-#   # cell index starts at zero to avoid an extra calculation inside the function
-#   # mclapply forks the calling environment and makes the data and code available to each process
-#   cat("\nstarting cell-by-cell mapping for year", year_out, "at", date(), "\n")
-#   mcout = mclapply(c(0:(ncells_out-1)), function(i) upscale_cell(cell = i, lonW, lonE, latS, latN, PROJ4_STRING, luh2_bioharv_names, harvest_in_rast_stack), mc.cores = 1)
-#   cat("finishing cell-by-cell mapping (before sorting and writing) for year", year_out, "at", date(), "\n")
-#   
-#   # merge the out data and order by cell index
-#   # each mcout is a one-record df with the cell index from above and
-#   #     the weighted sum of the biomass harvest in kg C for each type
-#   #     with the type names from luh2_bioharv_names
-#   luh2elm_out = rbind.fill(mcout)
-#   luh2elm_out = luh2elm_out[order(luh2elm_out$cell),]
-#   
-#   #cat("Before storage loop", year_out, "\n")
-#   
-#   # store the out data and sum this year for globe
-#   # NAs have been removed in the function above
-#   # compare in and out global harvest in kg C for this year
-#   # need to store this is in the year+1 index
-#   for (h in 1:num_harvest) {
-#     harvest_out[h,,,yind_out+1] = luh2elm_out[, luh2_bioharv_names[h]]
-#     harvest_out_globe[h] = sum(harvest_out[h,,,yind_out+1])
-#     
-#     # duplicate the first record in the output data
-#     if (yind_out == 1) {
-#       harvest_out[h,,,yind_out] = harvest_out[h,,,yind_out+1]
-#     }
-#     
-#     if (harvest_out_globe[h] != harvest_in_globe[h]) {
-#       # check for precision tolerance
-#       # if ( abs(harvest_out_globe[h] - harvest_in_globe[h]) >= tol) {
-#       # 	stop(paste("Error:", year_out, "global out harvest", harvest_out_globe[h],
-#       # 			"kg C does not equal global in harvest", harvest_in_globe[h],
-#       # 			"for harvest type", luh2_bioharv_names[h]))
-#       # }
-#     }
-#     
-#   } # end for loop over h for out data
-#   
-#   #cat("Before annual tracking", year_out, "\n")
-#   
-#   # keep track of and check the annual sum across harvest types in Pg C
-#   # note that these data have not been year shifted
-#   harvest_in_globe_series[yind_out] = sum(harvest_in_globe) * k2P
-#   harvest_out_globe_series[yind_out] = sum(harvest_out_globe) * k2P
-#   if (harvest_out_globe_series[yind_out] != harvest_in_globe_series[yind_out]) {
-#     # Bypassed # check for precision tolerance
-#     # if ( abs(harvest_out_globe_series[yind_out] - harvest_in_globe_series[yind_out]) >= tol) {
-#     # 	stop(paste("Error:", year_out, "total global out harvest", harvest_out_globe_series[yind_out],
-#     # 				"Pg C does not equal total global in harvest", harvest_in_globe_series[yind_out]))
-#     # }
-#   }
-#   
-#   cat("Finish year", year_out, "at", date(), "\n")
-#   
-# } # end for loop over out years (yind_out)
-# 
-# nc_close(luh2id)
-# 
-# # plot the global total in and out time series in Pg C
-# # these data have not been year shifted, so drop the last element (2015 has no data)
-# plot(years_out[1:(nyears_out-1)], harvest_in_globe_series[1:(nyears_out-1)], type = "l", lty = 1, main = "Annual total global biomass harvest",
-#      xlab = "Year", ylab = "Harvested carbon in kg C")
-# lines(years_out[1:(nyears_out-1)], harvest_out_globe_series[1:(nyears_out-1)], lty=2, col = "red")
-# legend("topleft", legend = c("LUH2 file", "ELM file"), lty=c(1,2), col = c("black", "red"), cex = 0.8)
-# 
 # # this overwrites an existing out_land_file
 # file.copy(land_file, out_land_file, overwrite=TRUE)
 # 
@@ -508,13 +540,25 @@ cat("Finish remap_harvest_rate at", date(), "\n")
 #   lsid <- ncvar_add(lsid, new_var)
 #   
 #   # add biomass harvest data
-#   ncvar_put(lsid, varid = ls_harv_names[h], vals = harvest_out[h,,,], start = c(1,1,1), count = c(nlon_out, nlat_out, nyears_out))
-#   
+#   ncvar_put(lsid, varid = ls_harv_names[h], vals = harv_rate_in[h,,,], start = c(1,1,1), count = c(nlon_out, nlat_out, nyears_out))
 # } # end for loop over h for updating output file	
 # 
 # nc_close(lsid)
 # 
-# cat("Finish proc_luh2_biomass_harv at", date(), "\n")
+# cat("Finish remap_harvest_rate at", date(), "\n")
 # 
+# # 6. Post-processing and generate plots
+# LVP<-vector(mode='list',length=2)
+# 
+# r1 <-c(rast(new_harv_ts[,,1]), rast(new_harv_ts[,,80]), rast(new_harv_ts[,,160]))
+# r2 <-c(rast(harv_rate_in[1,,,1]), rast(harv_rate_in[1,,,80]), rast(harv_rate_in[1,,,160]))
+# 
+# crs(r1) <- PROJ4_STRING
+# crs(r2) <- PROJ4_STRING
+# 
+# LVP[[1]]<- levelplot(r1, layout=c(1,r1@ptr$nlyr()))
+# LVP[[2]]<- levelplot(r2, layout=c(1,r1@ptr$nlyr()))
+# 
+# do.call(grid.arrange,c(LVP,ncol=2))
 
 
