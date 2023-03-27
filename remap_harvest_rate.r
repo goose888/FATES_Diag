@@ -34,7 +34,7 @@
 # (even though it is not used). This should be changed in e3sm phase 3 restructuring
 # 5) also: the diagnostic time series data have not been shifted and so are 
 # plotted accordingly
-# 6) This script maybe highly inefficient with high-res input data. I only 
+# 6) This script maybe highly inefficient handling high-res input data. I only 
 # tested the inputs with a global 4x5 degree resolution
 
 library(raster)
@@ -245,11 +245,11 @@ remap_harv_rate_per_yr <- function(nonforest, nlon_out, nlat_out, nyear_out, cyr
             t = adjust_bound(lt, t, nlat_out)
             if(!is.na(surplus_map[ln+n,lt+t])){
               redis_factor[ln+n,lt+t] = - redis_factor[ln,lt] * surplus_map[ln+n,lt+t] / hotspot_for_c
-              if((ln+n) == 26 && (lt+t) == 34){
-                cat("Year?", cyr, " \n")
-                cat("Forest C of the point.", forest_c[ln+n,lt+t], " \n")
-                cat("Point found before.", surplus_map[ln+n,lt+t], " \n")
-              }
+              # if((ln+n) == 26 && (lt+t) == 34){
+              #   cat("Year?", cyr, " \n")
+              #   cat("Forest C of the point.", forest_c[ln+n,lt+t], " \n")
+              #   cat("Point found before.", surplus_map[ln+n,lt+t], " \n")
+              # }
               
               # Update surplus map
               surplus_map[ln+n,lt+t] = surplus_map[ln+n,lt+t] - redis_factor[ln+n,lt+t] * harv_c[ln,lt] * 1e6 * area_grid[ln,lt]
@@ -260,15 +260,15 @@ remap_harv_rate_per_yr <- function(nonforest, nlon_out, nlat_out, nyear_out, cyr
               } else {
                 harv_ts[3,ln+n,lt+t] = harv_ts[3,ln+n,lt+t] + (redis_factor[ln+n,lt+t] * harv_c[ln,lt])*1e6*area_grid[ln,lt]
               }
-              if((ln+n) == 26 && (lt+t) == 34){
-                cat("Point found after.", surplus_map[ln+n,lt+t], " \n")
-                cat("Redis factor.", redis_factor[ln+n,lt+t] * harv_c[ln,lt], " \n")
-                cat("Source harv c.", harv_c[ln,lt], " \n")
-                cat("The grid id, ", ln+n, lt+t, "\n")
-                cat("The source grid id, ", ln, lt, "\n")
-                cat("The total available C for source is, ", hotspot_for_c, "\n")
-                readline(prompt="Pause, press [enter] to continue")
-              }
+              # if((ln+n) == 26 && (lt+t) == 34){
+              #   cat("Point found after.", surplus_map[ln+n,lt+t], " \n")
+              #   cat("Redis factor.", redis_factor[ln+n,lt+t] * harv_c[ln,lt], " \n")
+              #   cat("Source harv c.", harv_c[ln,lt], " \n")
+              #   cat("The grid id, ", ln+n, lt+t, "\n")
+              #   cat("The source grid id, ", ln, lt, "\n")
+              #   cat("The total available C for source is, ", hotspot_for_c, "\n")
+              #   readline(prompt="Pause, press [enter] to continue")
+              # }
             }
           }
         }
@@ -320,7 +320,7 @@ remap_harv_rate_per_yr <- function(nonforest, nlon_out, nlat_out, nyear_out, cyr
     }
   }
   # Tiny negative forest C due to less vegc in the future year is possible, thus force 
-  # those negative values to zero thus those gridcells will not contribute in future years
+  # those negative values to zero and those gridcells will not contribute in future years
   new_forest_c[new_forest_c<0] = 0.0
   out_list[[2]] <- new_forest_c
   
@@ -390,10 +390,10 @@ out_land_file = "C:/Users/sshu3/anaconda_wkspace/FATES/landuse.timeseries_4x5_hi
 # Options
 # Stage 1 --- Harmonize primary forest
 # Stage 2 --- Harmonize secondary forest
-stage = 1
+stage = 2
 # Set true to include non-forest harvest rate
 inc_non_forest = TRUE
-start_year_in = 1700
+start_year_in = 1800
 stop_year_in = 2015
 # Validate the regional total based on GCAM regions
 gcam_constraint = FALSE
