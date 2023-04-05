@@ -380,12 +380,14 @@ upscale_cell <- function(cell, lonW, lonE, latS, latN, p4string, raster_stack)	{
 
 ############ change this to reflect correct directory structure and files ! ###################
 gcam_reg_file = "C:/Users/sshu3/anaconda_wkspace/FATES/AEZ_orig.grd"
+gcam_reg_mask = "C:/Users/sshu3/anaconda_wkspace/FATES/AEZ_orig_4x5.nc"
 grid_file = "C:/Users/sshu3/anaconda_wkspace/FATES/griddata_4x5_060404.nc"
 land_file = "C:/Users/sshu3/anaconda_wkspace/FATES/landuse.timeseries_4x5_HIST_simyr1700-2015.biomass_harvest.nc"
 # land_file = "C:/Users/sshu3/anaconda_wkspace/FATES/landuse.timeseries_4x5_hist_simyr1850-2015_200311_biomass_harvest.nc"
 biom_den_file = "C:/Users/sshu3/anaconda_wkspace/FATES/fates.forest.vegc.avg_1700_1707.nc"
 secb_den_file = "C:/Users/sshu3/anaconda_wkspace/FATES/fates.sec.forest.vegc.ts_1700_2015.nc"
 out_land_file = "C:/Users/sshu3/anaconda_wkspace/FATES/landuse.timeseries_4x5_hist_harmonized_simyr1700-2015.biomass_harvest.nc"
+out_reg_mask = "C:/Users/sshu3/anaconda_wkspace/FATES/AEZ_orig_4x5_c230404.nc"
 
 # Options
 # Stage 1 --- Harmonize primary forest
@@ -482,9 +484,25 @@ if(gcam_constraint){
    cat("finishing cell-by-cell mapping. \n")
 
    reg2elm_out = rbind.fill(mcout)
-   reg2elm_out = luh2elm_out[order(luh2elm_out$cell),]
+   reg2elm_out = reg2elm_out[order(reg2elm_out$cell),]
    gcam_out = array(dim=c(nlon_out, nlat_out))
    gcam_out[,] = reg2elm_out[, "layer"]
+   
+   # Writing mask to netcdf
+   file.copy(gcam_reg_mask, out_reg_mask, overwrite=TRUE)
+   
+   # rename original fraction data and add biomass harvest data with original names
+   lsid = nc_open(out_reg_mask, write=TRUE)
+   
+   # get the dimension objects
+   lon_dim = lsid$dim[['lsmlon']]
+   lat_dim = lsid$dim[['lsmlat']]
+
+   # replace the variable
+   ncvar_put(lsid, varid = "AEZ_MASK", vals = gcam_out, start = c(1,1), count = c(nlon_out, nlat_out))
+   
+   nc_close(lsid)
+   
 }
 # 2. Read in biomass density from ELM-FATES
 if(stage == 1) {
