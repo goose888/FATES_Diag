@@ -1,7 +1,8 @@
-# accumulate_harvest_bf_1700.r
+# get_secf_frac.r
 
-# this script adds up the harvest rate before 1700 and rewrite the harvest rate
-# at year 1700.
+# this script overlap the harvest rate before 1700 using secondary forest area 
+# fraction and rewrite the harvest rate at year 1700.
+# For area-based harvest calculation only.
 
 # required variables to set below (lines after the grid mapping function):
 #	luh2_file: luh2 transitions file - source of harvest data (in kg C per year) (1/4 degree res)
@@ -83,43 +84,33 @@ luh2elm_cell <- function(cell, lonW, lonE, latS, latN, p4string, type_names, ras
   harv_cell_df = extract(raster_stack, spobj, weights=TRUE, normalizeWeights=FALSE, cellnumbers=TRUE, df=TRUE, small=TRUE, exact=TRUE, na.rm=TRUE)
   out_df = harv_cell_df[1,c("cell", type_names)]
   out_df$cell = cell
-  for (h in 1:num_harvest) {
-    out_df[1,type_names[h]] = sum(harv_cell_df[,type_names[h]] * harv_cell_df$weight, na.rm=TRUE)
+  for (h in 1:num_secf) {
+    out_df[1,type_names[h]] = mean(harv_cell_df[,type_names[h]] * harv_cell_df$weight, na.rm=TRUE)
   }
   
   return(out_df)
   
 } # end single-cell mapping function
 
-
 ############ change this to reflect correct directory structure and files ! ###################
-luh2_file = "D:/LUH2/transitions.nc"
+luh2_file = "D:/LUH2/states_hist_hi.nc"
 grid_file = "C:/Users/sshu3/anaconda_wkspace/griddata_4x5_060404.nc"
-land_file = "C:/Users/sshu3/anaconda_wkspace/landuse.timeseries_4x5_HIST_simyr1700-2015_c02172023.nc"
-out_land_file = "C:/Users/sshu3/anaconda_wkspace/Fates/landuse.timeseries_4x5_HIST_simyr1700.accumulated.nc"
+land_file = "C:/Users/sshu3/anaconda_wkspace/landuse.timeseries_4x5_HIST_hi_simyr1700-2015_c03242023.nc"
+out_land_file = "C:/Users/sshu3/anaconda_wkspace/Fates/landuse.timeseries_4x5_HIST_hi_simyr1700.accumulated.nc"
 start_year_in = 850
-# Unit: 1, biomass; 2, area fraction
-unit = 1
 
-cat("Start accumulate_harvest_bf_1700 at", date(), "\n")
+cat("Start get_secf_frac at", date(), "\n")
 
-# the number of harvest variables and their names
-# the names are matched by order for the in and out files
-# primary forest, primary non-forest, secondary mature forest, secondary young forest, secondary non-forest
-num_harvest = 5
-luh2_bioharv_names = c("primf_bioh", "primn_bioh", "secmf_bioh", "secyf_bioh", "secnf_bioh")
+# the number of secondary forest and non-forest area fraction
+num_secf = 2
+luh2_secf_names = c("secdf", "secdn")
 
-
-ls_harv_names = c("HARVEST_VH1", "HARVEST_VH2", "HARVEST_SH1", "HARVEST_SH2", "HARVEST_SH3")
-ls_harv_names_frac = c("HARVEST_VH1_FRAC", "HARVEST_VH2_FRAC", "HARVEST_SH1_FRAC", "HARVEST_SH2_FRAC", "HARVEST_SH3_FRAC")
+ls_harv_names = c("HARVEST_VH1", "HARVEST_VH2")
 
 # projection info for all files, data, and rasters
 PROJ4_STRING = "+proj=longlat +ellps=WGS84 +datum=WGS84 +no_defs"
 
 num_cores = detectCores()
-
-# kilograms to Petagrams C
-k2P = 1/1000000000000
 
 # precision tolerance for error checking
 tol = 1e-4
@@ -180,32 +171,33 @@ year_end = years_out[1]- start_year_in
 y_len = year_end - year_beg + 1
 
 # set up some arrays
-harvest_in_tmp = array(dim=c(num_harvest, nlon_in, nlat_in))
-harvest_in = array(dim=c(num_harvest, nlon_in, nlat_in))
-harvest_in_globe = array(dim=c(num_harvest))
+harvest_in_tmp = array(dim=c(num_secf, nlon_in, nlat_in))
+harvest_in = array(dim=c(num_secf, nlon_in, nlat_in))
+harvest_in_globe = array(dim=c(num_secf))
 harvest_in_globe_series = array(dim=c(nyears_out))
 harvest_in_globe_series[] = 0
-harvest_out = array(dim=c(num_harvest, nlon_out, nlat_out, nyears_out))
-harvest_out_globe = array(dim=c(num_harvest))
+harvest_out = array(dim=c(num_secf, nlon_out, nlat_out, nyears_out))
+harvest_out_globe = array(dim=c(num_secf))
 harvest_out_globe_series = array(dim=c(nyears_out))
 harvest_out[,,,]= 0
 harvest_out_globe_series[] = 0
 
-# read these years' in data, accumulate harvest rate for primary forest 
-# and non-forest and convert to rasters and put into a stack
+# read these years' in data, get primary forest and non-forest fraction
+# as harvest rate and convert to rasters and put into a stack
 # need to flip the lat so that the matrix origin is at the lower left corner
 harvest_in_tmp[,,] = 0.
 harvest_in[,,] = 0
 harvest_in_globe[] = 0
 harvest_out_globe[] = 0
 harvest_in_rast_stack=stack()
-for (iyr in year_beg:year_end) {
-  for (h in 1:num_harvest) {
-    harvest_in_tmp[h,,] = ncvar_get(luh2id, varid=luh2_bioharv_names[h], start=c(1, 1, iyr), count=c(nlon_in, nlat_in, 1))
-    harvest_in[h,,] = harvest_in[h,,] + harvest_in_tmp[h,,]
-  }
+iyr = years_out[1]- start_year_in
+for (h in 1:num_secf) {
+  harvest_in_tmp[h,,] = ncvar_get(luh2id, varid=luh2_secf_names[h], start=c(1, 1, iyr), count=c(nlon_in, nlat_in, 1))
+  harvest_in[h,,] = harvest_in[h,,] + harvest_in_tmp[h,,]
+  harvest_in <- ifelse(is.na(harvest_in), 0.0, harvest_in)
 }
-for (h in 1:num_harvest) {
+
+for (h in 1:num_secf) {
   harvest_in_t = t(harvest_in[h,,])
   harvest_rast = raster(x=harvest_in_t, xmn=-180, ymn=-90, xmx=180, ymx=90, crs=PROJ4_STRING)
   harvest_in_rast_stack = addLayer(harvest_in_rast_stack , harvest_rast)
@@ -213,47 +205,47 @@ for (h in 1:num_harvest) {
   harvest_in_globe[h] = sum(harvest_in[h,,], na.rm=TRUE)
 } # end for loop over h for in data
 # set the raster layer names
-names(harvest_in_rast_stack) <- luh2_bioharv_names
-  
+names(harvest_in_rast_stack) <- luh2_secf_names
+
 # process each out cell in parallel
 # cell index starts at zero to avoid an extra calculation inside the function
 # mclapply forks the calling environment and makes the data and code available to each process
 cat("\nstarting cell-by-cell mapping for the historical accumulation at ", date(), "\n")
-mcout = mclapply(c(0:(ncells_out-1)), function(i) luh2elm_cell(cell = i, lonW, lonE, latS, latN, PROJ4_STRING, luh2_bioharv_names, harvest_in_rast_stack), mc.cores = 1)
+mcout = mclapply(c(0:(ncells_out-1)), function(i) luh2elm_cell(cell = i, lonW, lonE, latS, latN, PROJ4_STRING, luh2_secf_names, harvest_in_rast_stack), mc.cores = 1)
 cat("finishing cell-by-cell mapping (before sorting and writing) for the historical accumulation at", date(), "\n")
-  
+
 # merge the out data and order by cell index
 # each mcout is a one-record df with the cell index from above and
 #     the weighted sum of the biomass harvest in kg C for each type
-#     with the type names from luh2_bioharv_names
+#     with the type names from luh2_secf_names
 luh2elm_out = rbind.fill(mcout)
 luh2elm_out = luh2elm_out[order(luh2elm_out$cell),]
-  
+
 #cat("Before storage loop", year_out, "\n")
-  
+
 # store the out data and sum this year for globe
 # NAs have been removed in the function above
 # compare in and out global harvest in kg C for this year
 # need to store this is in the year+1 index
-harvest_out_tmp = array(dim=c(num_harvest, nlon_out, nlat_out))
+harvest_out_tmp = array(dim=c(num_secf, nlon_out, nlat_out))
 harvest_out_tmp[,,] = 0.
-for (h in 1:num_harvest) {
-  harvest_out_tmp[h,,] = luh2elm_out[, luh2_bioharv_names[h]]
+for (h in 1:num_secf) {
+  harvest_out_tmp[h,,] = luh2elm_out[, luh2_secf_names[h]]
   harvest_out_globe[h] = sum(harvest_out_tmp[h,,])
   
-  if (harvest_out_globe[h] != harvest_in_globe[h]) {
-    # check for precision tolerance
-    # if ( abs(harvest_out_globe[h] - harvest_in_globe[h]) >= tol) {
-    # 	stop(paste("Error:", year_out, "global out harvest", harvest_out_globe[h],
-    # 			"kg C does not equal global in harvest", harvest_in_globe[h],
-    # 			"for harvest type", luh2_bioharv_names[h]))
-    # }
-  }
-    
+  # if (harvest_out_globe[h] != harvest_in_globe[h]) {
+  #   # check for precision tolerance
+  #   # if ( abs(harvest_out_globe[h] - harvest_in_globe[h]) >= tol) {
+  #   # 	stop(paste("Error:", year_out, "global out harvest", harvest_out_globe[h],
+  #   # 			"kg C does not equal global in harvest", harvest_in_globe[h],
+  #   # 			"for harvest type", luh2_secf_names[h]))
+  #   # }
+  # }
+  
 } # end for loop over h for out data
-  
+
 #cat("Before annual tracking", year_out, "\n")
-  
+
 cat("Finish aggregating accumulated forest harvest rate at", date(), "\n")
 
 file.copy(land_file, out_land_file, overwrite=TRUE)
@@ -268,13 +260,7 @@ lon_dim = lsid$dim[['lsmlon']]
 lat_dim = lsid$dim[['lsmlat']]
 time_dim = lsid$dim[['time']]
 
-for (h in 1:num_harvest) {
-  # rename fraction data
-  lsid <- ncvar_rename(lsid, ls_harv_names[h], ls_harv_names_frac[h])
-  
-  # define and add new variables; missing value is 0
-  new_var <- ncvar_def(ls_harv_names[h], "kg C per year", list(lon_dim, lat_dim, time_dim), prec="double")
-  lsid <- ncvar_add(lsid, new_var)
+for (h in 1:num_secf) {
   
   # add biomass harvest data
   ncvar_put(lsid, varid = ls_harv_names[h], vals = harvest_out[h,,,], start = c(1,1,1), count = c(nlon_out, nlat_out, nyears_out))

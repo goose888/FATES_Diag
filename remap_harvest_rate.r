@@ -86,7 +86,7 @@ adjust_bound <- function(gid, shift, bound) {
 remap_harv_rate <- function(nonforest, nlon_out, nlat_out, nyr, forest_c, harv_c, harv_ts)	{
   # Arguments:
   # nonforest - logical argument to decide if non-forest harvest rate is
-  #             accounted in the input
+  #             accounted for in the input
   # nlon_out - length of longitude
   # nlat_out - length of latitude
   # nyr - length of year
