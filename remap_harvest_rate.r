@@ -382,20 +382,20 @@ upscale_cell <- function(cell, lonW, lonE, latS, latN, p4string, raster_stack)	{
 gcam_reg_file = "C:/Users/sshu3/anaconda_wkspace/FATES/AEZ_orig.grd"
 gcam_reg_mask = "C:/Users/sshu3/anaconda_wkspace/FATES/AEZ_orig_4x5.nc"
 grid_file = "C:/Users/sshu3/anaconda_wkspace/FATES/griddata_4x5_060404.nc"
-land_file = "C:/Users/sshu3/anaconda_wkspace/FATES/landuse.timeseries_4x5_HIST_simyr1700-2015.biomass_harvest.nc"
+land_file = "C:/Users/sshu3/anaconda_wkspace/FATES/landuse.timeseries_4x5_HIST_simyr1700-2015.biomass_harvest_noaccu.nc"
 # land_file = "C:/Users/sshu3/anaconda_wkspace/FATES/landuse.timeseries_4x5_hist_simyr1850-2015_200311_biomass_harvest.nc"
 biom_den_file = "C:/Users/sshu3/anaconda_wkspace/FATES/fates.forest.vegc.avg_1700_1707.nc"
 secb_den_file = "C:/Users/sshu3/anaconda_wkspace/FATES/fates.sec.forest.vegc.ts_1700_2015.nc"
-out_land_file = "C:/Users/sshu3/anaconda_wkspace/FATES/landuse.timeseries_4x5_hist_harmonized_simyr1700-2015.biomass_harvest.nc"
+out_land_file = "C:/Users/sshu3/anaconda_wkspace/FATES/landuse.timeseries_4x5_hist_harmonized_simyr1700-2015.biomass_harvest_primonly.nc"
 out_reg_mask = "C:/Users/sshu3/anaconda_wkspace/FATES/AEZ_orig_4x5_c230404.nc"
 
 # Options
 # Stage 1 --- Harmonize primary forest
 # Stage 2 --- Harmonize secondary forest
-stage = 2
+stage = 1
 # Set true to include non-forest harvest rate
 inc_non_forest = TRUE
-start_year_in = 1800
+start_year_in = 1700
 stop_year_in = 2015
 # Validate the regional total based on GCAM regions
 gcam_constraint = FALSE
