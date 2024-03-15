@@ -366,7 +366,7 @@ def obtain_dir_logging_impact_ts(modname, modname_hrv, varlist, begyr, endyr, ar
     """
     Obtain the direct logging impact, direct impact is calculated by subtracting the variable values 
     after logging (Feb) from before the logging (Jan)
-    # Excluded 1850 since it is the begin year
+    # Excluded 1850 since it is the begin year and no previous year information for the calculation
     # modname - list contains name of all model cases
     # varlist - list contains the data of corresponding variables
     # begyr - the begin year of the data used
@@ -515,6 +515,7 @@ def qa_fates(modname, cr_area_cl):
     For other logging cases we use 50% as a threshold.
     These outliers shall be removed when calculating the BGP effect due to a certain issue with FATES global simualtions. 
     Issue: Sudden decrease of canopy coverage until reaching the minimum value (17%) is triggered at random time.
+    Need further investigation.
     # modname - list contains name of all model cases
     # cr_area_cl - Crown area from model output
     """
