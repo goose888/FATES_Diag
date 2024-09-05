@@ -9,6 +9,7 @@ from numba import njit
 import numpy as np
 import copy
 import netCDF4 as nc4
+from scipy import stats
 
 def retrieve_hrvrate(fpath, area_4x5, denflag=0, getmask=True, hr_lev=0.0, yr_beg=1850):
     """
@@ -612,3 +613,18 @@ def moving_average(a, n=10) :
     ret = np.cumsum(a, dtype=float)
     ret[n:] = ret[n:] - ret[:-n]
     return ret[n - 1:] / n
+
+def stat_sig_mask_v2(array_1, array_2, timesteps, threshold):
+    """
+    Return the mask of map where responses are insignificant
+    # array_1 - input array_1
+    # array_2 - input array_2
+    # timesteps - The length of array_1 and array_2
+    # threshold - threshold of significant level used for display purpose
+    """
+    a = stats.ttest_ind_from_stats(np.mean(array_1,axis=0),np.std(array_1,axis=0),timesteps,
+                             np.mean(array_2,axis=0),np.std(array_2,axis=0),timesteps, equal_var=False)[1]
+    cond = a > threshold
+    a[cond]= np.nan
+    a[~np.isnan(a)] = 1
+    return a
